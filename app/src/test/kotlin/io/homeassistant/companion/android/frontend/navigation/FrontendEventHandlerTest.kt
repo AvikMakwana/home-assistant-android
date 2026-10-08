@@ -656,6 +656,36 @@ class FrontendEventHandlerTest {
     }
 
     @Test
+    fun `Given NavigateToTileConfig event then onNavigateToTileConfig is called with entityId`() {
+        var capturedEntityId: String? = null
+        val events = TestSharedFlow<FrontendEvent>()
+
+        composeTestRule.setContent {
+            FrontendEventHandler(
+                events = events,
+                onShowSnackbar = { _, _ -> false },
+                onNavigateToSettings = {},
+                onNavigateToAssist = { _, _, _ -> },
+                onOpenExternalLink = {},
+                onShowServerSwitcher = {},
+                onNavigateToNfcWrite = { _, _ -> },
+                onLaunchMatterThreadIntent = {},
+                onRequestFullscreen = {},
+                onNavigateToWidgetConfig = { _, _ -> },
+                onNavigateToTileConfig = { entityId ->
+                    capturedEntityId = entityId
+                },
+            )
+        }
+
+        composeTestRule.waitForIdle()
+        events.emit(FrontendEvent.NavigateToTileConfig(entityId = "light.kitchen"))
+        composeTestRule.waitForIdle()
+
+        assertEquals("light.kitchen", capturedEntityId)
+    }
+
+    @Test
     fun `Given LaunchMatterThreadIntent event then onLaunchMatterThreadIntent is called with the intent sender`() {
         var capturedIntentSender: IntentSender? = null
         val intentSender = mockk<IntentSender>()

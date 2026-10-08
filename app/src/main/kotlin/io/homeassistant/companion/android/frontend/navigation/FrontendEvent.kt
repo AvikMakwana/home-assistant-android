@@ -127,6 +127,13 @@ sealed interface FrontendEvent {
     data class NavigateToWidgetConfig(val entityId: String, val widgetType: WidgetType) : FrontendEvent
 
     /**
+     * Navigate to Quick Settings tile configuration for the given entity.
+     *
+     * @param entityId The entity to pre-fill in the tile configuration
+     */
+    data class NavigateToTileConfig(val entityId: String) : FrontendEvent
+
+    /**
      * Launch a Play Services Matter/Thread intent. The host is responsible for launching the
      * [intentSender] via an `ActivityResultLauncher` and forwarding the result back to the
      * ViewModel via [io.homeassistant.companion.android.frontend.FrontendViewModel.onMatterThreadIntentResult].

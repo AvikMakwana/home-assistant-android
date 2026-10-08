@@ -1,6 +1,7 @@
 package io.homeassistant.companion.android.qs
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -25,6 +26,15 @@ import timber.log.Timber
 
 @AndroidEntryPoint
 class TilePreferenceActivity : BaseActivity() {
+
+    companion object {
+        private const val EXTRA_ENTITY_ID = "entity_id"
+
+        fun newInstance(context: Context, entityId: String): Intent =
+            Intent(context, TilePreferenceActivity::class.java).apply {
+                putExtra(EXTRA_ENTITY_ID, entityId)
+            }
+    }
 
     @Inject
     lateinit var serverManager: ServerManager
@@ -57,17 +67,39 @@ class TilePreferenceActivity : BaseActivity() {
         }
 
         lifecycleScope.launch {
+            val entityId = intent.getStringExtra(EXTRA_ENTITY_ID)
+            if (entityId != null) {
+                val tilesById = tileDao.getAll().associateBy { it.tileId }
+                val availableTileId = tileSlots
+                    .firstOrNull { tilesById[it.id.value]?.isSetup != true }
+                    ?.id
+                    ?.value
+                if (availableTileId == null) {
+                    Timber.w("No tile slot available for Add To Tile")
+                    finishWithoutAnimation()
+                    return@launch
+                }
+                tileId = availableTileId
+            }
             val tileData = tileDao.get(tileId)
 
             val intent = if (!serverManager.isRegistered()) {
                 Intent(this@TilePreferenceActivity, LaunchActivity::class.java)
             } else if (tileData?.isSetup == true) {
+                if (entityId != null) {
+                    Timber.w("Selected Add To Tile slot became configured before opening settings")
+                    finishWithoutAnimation()
+                    return@launch
+                }
                 this@TilePreferenceActivity.intentLaunchWithNavigateTo(
                     target = FrontendTarget.EntityMoreInfo(tileData.entityId),
                     serverId = tileData.serverId,
                 )
             } else {
-                SettingsActivity.newInstance(this@TilePreferenceActivity, SettingsActivity.Deeplink.QSTile(tileId))
+                SettingsActivity.newInstance(
+                    this@TilePreferenceActivity,
+                    SettingsActivity.Deeplink.QSTile(tileId, entityId),
+                )
             }
 
             withContext(Dispatchers.Main) {
@@ -76,6 +108,14 @@ class TilePreferenceActivity : BaseActivity() {
                 @Suppress("DEPRECATION")
                 overridePendingTransition(0, 0) // Disable activity start/stop animation
             }
+        }
+    }
+
+    private suspend fun finishWithoutAnimation() {
+        withContext(Dispatchers.Main) {
+            finish()
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
         }
     }
 }

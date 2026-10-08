@@ -72,7 +72,7 @@ class SettingsActivity : BaseActivity() {
         data object NotificationHistory : Deeplink
 
         /** Opens the tile settings, preselecting [tileId] when one is given. */
-        data class QSTile(val tileId: String? = null) : Deeplink
+        data class QSTile(val tileId: String? = null, val entityId: String? = null) : Deeplink
         data class Sensor(val sensorId: String) : Deeplink
         data object Websocket : Deeplink
         data object AssistSettings : Deeplink
@@ -131,7 +131,10 @@ class SettingsActivity : BaseActivity() {
 
                             is Deeplink.QSTile -> {
                                 val tileId = settingsNavigation.tileId
-                                Bundle().apply { putString("id", tileId) }
+                                Bundle().apply {
+                                    putString("id", tileId)
+                                    putString("entity_id", settingsNavigation.entityId)
+                                }
                             }
 
                             Deeplink.Websocket -> {

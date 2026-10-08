@@ -34,6 +34,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceTimeBy
@@ -91,6 +92,10 @@ class ManageTilesViewModelTest {
         attributes = emptyMap(),
         lastChanged = LocalDateTime.now(),
         lastUpdated = LocalDateTime.now(),
+    )
+
+    private fun entityDisplay(entityId: String) = EntityDisplayWithContext(
+        EntityDisplayWithoutContext(entityId = entityId, name = entityId, icon = Mdi.Account),
     )
 
     private fun fakeTile(
@@ -237,6 +242,112 @@ class ManageTilesViewModelTest {
         advanceUntilIdle()
 
         assertEquals(tileSlots[0].id, viewModel.state.value.selectedTileId)
+    }
+
+    @Test
+    fun `Given Add To entity when selecting unconfigured tile then entity is preselected after entities load`() = runTest {
+        val tileId = tileSlots[1].id.value
+        val entityId = "light.preselected"
+        val entityStates = MutableSharedFlow<EntityDisplayState<EntityDisplayWithContext>>()
+        coEvery { tileDao.get(tileId) } returns fakeTile(tileId = tileId, label = "", entityId = "")
+        every { entitiesForDisplayManager.snapshotInContext(1, any<(Entity) -> Boolean>()) } returns entityStates
+
+        val savedState = SavedStateHandle(mapOf("id" to tileId, "entity_id" to entityId))
+        val viewModel = createViewModel(savedState)
+        advanceUntilIdle()
+        entityStates.emit(EntityDisplayState.Loaded(listOf(entityDisplay(entityId))))
+        advanceUntilIdle()
+
+        assertEquals(TileId(tileId), viewModel.state.value.selectedTileId)
+        assertEquals(entityId, viewModel.state.value.selectedEntityId)
+        assertNull(savedState.get<String>("entity_id"))
+    }
+
+    @Test
+    fun `Given Add To entity when switching tile before entities load then entity is not preselected`() = runTest {
+        val targetTileId = tileSlots[1].id.value
+        val otherTileId = tileSlots[2].id.value
+        val entityId = "light.preselected"
+        val entityStates = MutableSharedFlow<EntityDisplayState<EntityDisplayWithContext>>()
+        coEvery { tileDao.get(targetTileId) } returns fakeTile(tileId = targetTileId, label = "", entityId = "")
+        coEvery { tileDao.get(otherTileId) } returns fakeTile(tileId = otherTileId, label = "", entityId = "")
+        every { entitiesForDisplayManager.snapshotInContext(1, any<(Entity) -> Boolean>()) } returns entityStates
+
+        val savedState = SavedStateHandle(mapOf("id" to targetTileId, "entity_id" to entityId))
+        val viewModel = createViewModel(savedState)
+        advanceUntilIdle()
+
+        viewModel.selectTile(TileId(otherTileId))
+        advanceUntilIdle()
+        entityStates.emit(EntityDisplayState.Loaded(listOf(entityDisplay(entityId))))
+        advanceUntilIdle()
+
+        assertEquals(TileId(otherTileId), viewModel.state.value.selectedTileId)
+        assertNull(viewModel.state.value.selectedEntityId)
+        assertNull(savedState.get<String>("entity_id"))
+    }
+
+    @Test
+    fun `Given Add To entity when manually selecting entity before entities load then manual selection is kept`() = runTest {
+        val tileId = tileSlots[1].id.value
+        val pendingEntityId = "light.preselected"
+        val manualEntityId = "switch.manual"
+        val entityStates = MutableSharedFlow<EntityDisplayState<EntityDisplayWithContext>>()
+        coEvery { tileDao.get(tileId) } returns fakeTile(tileId = tileId, label = "", entityId = "")
+        every { entitiesForDisplayManager.snapshotInContext(1, any<(Entity) -> Boolean>()) } returns entityStates
+
+        val savedState = SavedStateHandle(mapOf("id" to tileId, "entity_id" to pendingEntityId))
+        val viewModel = createViewModel(savedState)
+        advanceUntilIdle()
+
+        viewModel.selectEntityId(manualEntityId)
+        entityStates.emit(EntityDisplayState.Loaded(listOf(entityDisplay(pendingEntityId), entityDisplay(manualEntityId))))
+        advanceUntilIdle()
+
+        assertEquals(manualEntityId, viewModel.state.value.selectedEntityId)
+        assertNull(savedState.get<String>("entity_id"))
+    }
+
+    @Test
+    fun `Given Add To entity and configured tile when selecting tile then existing entity is not overwritten`() = runTest {
+        val tileId = tileSlots[0].id.value
+        val entityStates = MutableSharedFlow<EntityDisplayState<EntityDisplayWithContext>>()
+        coEvery { tileDao.get(tileId) } returns fakeTile(
+            tileId = tileId,
+            label = "Existing",
+            entityId = "switch.existing",
+        )
+        every { entitiesForDisplayManager.snapshotInContext(1, any<(Entity) -> Boolean>()) } returns entityStates
+
+        val viewModel = createViewModel(SavedStateHandle(mapOf("id" to tileId, "entity_id" to "light.incoming")))
+        advanceUntilIdle()
+        entityStates.emit(EntityDisplayState.Loaded(listOf(entityDisplay("light.incoming"))))
+        advanceUntilIdle()
+
+        assertEquals("switch.existing", viewModel.state.value.selectedEntityId)
+        assertEquals("Existing", viewModel.state.value.tileLabel)
+    }
+
+    @Test
+    fun `Given Add To entity is not available when entities load then pending preselection is cleared`() = runTest {
+        val tileId = tileSlots[1].id.value
+        val savedState = SavedStateHandle(mapOf("id" to tileId, "entity_id" to "light.missing"))
+        val entityStates = MutableSharedFlow<EntityDisplayState<EntityDisplayWithContext>>()
+        coEvery { tileDao.get(tileId) } returns fakeTile(tileId = tileId, label = "", entityId = "")
+        every { entitiesForDisplayManager.snapshotInContext(1, any<(Entity) -> Boolean>()) } returns entityStates
+
+        val viewModel = createViewModel(savedState)
+        advanceUntilIdle()
+        entityStates.emit(EntityDisplayState.Loaded(listOf(entityDisplay("light.available"))))
+        advanceUntilIdle()
+
+        assertNull(viewModel.state.value.selectedEntityId)
+        assertNull(savedState.get<String>("entity_id"))
+
+        entityStates.emit(EntityDisplayState.Loaded(listOf(entityDisplay("light.missing"))))
+        advanceUntilIdle()
+
+        assertNull(viewModel.state.value.selectedEntityId)
     }
 
     @Test

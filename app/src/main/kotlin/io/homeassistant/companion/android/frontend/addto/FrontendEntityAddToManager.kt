@@ -1,6 +1,7 @@
 package io.homeassistant.companion.android.frontend.addto
 
 import android.content.Context
+import android.os.Build
 import androidx.annotation.VisibleForTesting
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.android.scopes.ViewModelScoped
@@ -10,13 +11,18 @@ import io.homeassistant.companion.android.common.data.integration.IntegrationDom
 import io.homeassistant.companion.android.common.data.integration.IntegrationDomains.IMAGE_DOMAIN
 import io.homeassistant.companion.android.common.data.integration.IntegrationDomains.MEDIA_PLAYER_DOMAIN
 import io.homeassistant.companion.android.common.data.integration.IntegrationDomains.TODO_DOMAIN
+import io.homeassistant.companion.android.common.data.integration.isUsableInTile
 import io.homeassistant.companion.android.common.data.prefs.AutoFavorite
 import io.homeassistant.companion.android.common.data.prefs.PrefsRepository
 import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.common.util.FailFast
+import io.homeassistant.companion.android.common.util.SdkVersion
+import io.homeassistant.companion.android.database.qs.TileDao
+import io.homeassistant.companion.android.database.qs.isSetup
 import io.homeassistant.companion.android.di.qualifiers.IsAutomotive
 import io.homeassistant.companion.android.frontend.navigation.FrontendEvent
 import io.homeassistant.companion.android.frontend.navigation.WidgetType
+import io.homeassistant.companion.android.settings.qs.tileSlots
 import io.homeassistant.companion.android.util.QuestUtil
 import io.homeassistant.companion.android.util.vehicle.isVehicleDomain
 import javax.inject.Inject
@@ -41,6 +47,7 @@ class FrontendEntityAddToManager @VisibleForTesting constructor(
     private val context: Context,
     private val serverManager: ServerManager,
     private val prefsRepository: PrefsRepository,
+    private val tileDao: TileDao,
     private val isAutomotive: Boolean,
     private val isQuest: Boolean,
     private val isFullFlavor: Boolean,
@@ -51,11 +58,13 @@ class FrontendEntityAddToManager @VisibleForTesting constructor(
         @ApplicationContext context: Context,
         serverManager: ServerManager,
         prefsRepository: PrefsRepository,
+        tileDao: TileDao,
         @IsAutomotive isAutomotive: Boolean,
     ) : this(
         context = context,
         serverManager = serverManager,
         prefsRepository = prefsRepository,
+        tileDao = tileDao,
         isAutomotive = isAutomotive,
         isQuest = QuestUtil.isQuest,
         isFullFlavor = BuildConfig.FLAVOR == "full",
@@ -99,6 +108,9 @@ class FrontendEntityAddToManager @VisibleForTesting constructor(
                 if (entity.domain == CAMERA_DOMAIN || entity.domain == IMAGE_DOMAIN) {
                     actions.add(EntityAddToAction.CameraWidget)
                 }
+                if (SdkVersion.isAtLeast(Build.VERSION_CODES.N) && entity.isUsableInTile() && hasFreeTileSlot()) {
+                    actions.add(EntityAddToAction.Tile)
+                }
             }
 
             if (isVehicleDomain(entity) && (isFullFlavor || isAutomotive)) {
@@ -113,7 +125,7 @@ class FrontendEntityAddToManager @VisibleForTesting constructor(
      *
      * For [EntityAddToAction.AndroidAutoFavorite], persists the favorite and returns a snackbar event.
      * For widget actions, returns a [FrontendEvent.NavigateToWidgetConfig].
-     * For unimplemented actions (Shortcut, Tile, Watch), returns null.
+     * For unimplemented actions (Shortcut, Watch), returns null.
      */
     suspend fun execute(entityId: String, action: EntityAddToAction): FrontendEvent? {
         return when (action) {
@@ -129,10 +141,21 @@ class FrontendEntityAddToManager @VisibleForTesting constructor(
                 FrontendEvent.NavigateToWidgetConfig(entityId, WidgetType.Camera)
             is EntityAddToAction.TodoWidget ->
                 FrontendEvent.NavigateToWidgetConfig(entityId, WidgetType.Todo)
-            is EntityAddToAction.Shortcut,
             is EntityAddToAction.Tile,
+            -> FrontendEvent.NavigateToTileConfig(entityId)
+            is EntityAddToAction.Shortcut,
             is EntityAddToAction.Watch,
             -> null
+        }
+    }
+
+    private suspend fun hasFreeTileSlot(): Boolean {
+        val configuredTileIds = tileDao.getAll()
+            .filter { it.isSetup }
+            .map { it.tileId }
+            .toSet()
+        return tileSlots.any { slot ->
+            slot.id.value !in configuredTileIds
         }
     }
 

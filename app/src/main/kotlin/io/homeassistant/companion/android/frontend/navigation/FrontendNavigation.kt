@@ -24,6 +24,7 @@ import io.homeassistant.companion.android.launch.HAStartDestinationRoute
 import io.homeassistant.companion.android.launch.LaunchActivity
 import io.homeassistant.companion.android.launch.PipReadiness
 import io.homeassistant.companion.android.nfc.WriteNfcTag
+import io.homeassistant.companion.android.qs.TilePreferenceActivity
 import io.homeassistant.companion.android.settings.SettingsActivity
 import io.homeassistant.companion.android.util.getActivity
 import kotlinx.coroutines.flow.SharedFlow
@@ -139,6 +140,10 @@ internal fun NavGraphBuilder.frontendScreen(
                 val context = navController.context
                 context.startActivity(widgetType.toConfigureIntent(context, entityId))
             },
+            onNavigateToTileConfig = { entityId ->
+                val context = navController.context
+                context.startActivity(TilePreferenceActivity.newInstance(context, entityId))
+            },
             onLaunchApp = onLaunchApp,
             onLaunchIntent = onLaunchIntent,
             onOpenSecuritySettings = onOpenSecuritySettings,
@@ -177,6 +182,7 @@ internal fun FrontendEventHandler(
     onLaunchMatterThreadIntent: (IntentSender) -> Unit,
     onRequestFullscreen: (Boolean) -> Unit,
     onNavigateToWidgetConfig: (entityId: String, widgetType: WidgetType) -> Unit,
+    onNavigateToTileConfig: (entityId: String) -> Unit = {},
     onLaunchApp: suspend (packageName: String) -> Unit = {},
     onLaunchIntent: suspend (intentUri: String) -> Unit = {},
     onOpenSecuritySettings: suspend () -> Unit = {},
@@ -221,6 +227,7 @@ internal fun FrontendEventHandler(
                 is FrontendEvent.LaunchApp -> onLaunchApp(event.packageName)
                 is FrontendEvent.LaunchIntent -> onLaunchIntent(event.intentUri)
                 is FrontendEvent.NavigateToWidgetConfig -> onNavigateToWidgetConfig(event.entityId, event.widgetType)
+                is FrontendEvent.NavigateToTileConfig -> onNavigateToTileConfig(event.entityId)
             }
         }
         events.collect { event -> handle(event) }

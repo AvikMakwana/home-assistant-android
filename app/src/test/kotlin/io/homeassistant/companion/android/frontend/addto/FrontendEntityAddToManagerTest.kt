@@ -1,6 +1,7 @@
 package io.homeassistant.companion.android.frontend.addto
 
 import android.content.Context
+import android.os.Build
 import io.homeassistant.companion.android.common.R as commonR
 import io.homeassistant.companion.android.common.data.integration.Entity
 import io.homeassistant.companion.android.common.data.integration.IntegrationDomains.CAMERA_DOMAIN
@@ -12,9 +13,13 @@ import io.homeassistant.companion.android.common.data.prefs.AutoFavorite
 import io.homeassistant.companion.android.common.data.prefs.PrefsRepository
 import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.common.util.FailFast
+import io.homeassistant.companion.android.common.util.SdkVersion
+import io.homeassistant.companion.android.database.qs.TileDao
+import io.homeassistant.companion.android.database.qs.TileEntity
 import io.homeassistant.companion.android.database.server.Server
 import io.homeassistant.companion.android.frontend.navigation.FrontendEvent
 import io.homeassistant.companion.android.frontend.navigation.WidgetType
+import io.homeassistant.companion.android.settings.qs.tileSlots
 import io.mockk.coEvery
 import io.mockk.coJustRun
 import io.mockk.coVerify
@@ -24,7 +29,10 @@ import java.time.LocalDateTime
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertNotNull
@@ -40,6 +48,7 @@ class FrontendEntityAddToManagerTest {
     private lateinit var serverManager: ServerManager
     private lateinit var prefsRepository: PrefsRepository
     private lateinit var integrationRepository: IntegrationRepository
+    private lateinit var tileDao: TileDao
     private lateinit var context: Context
 
     private val serverId = 42
@@ -49,17 +58,25 @@ class FrontendEntityAddToManagerTest {
         serverManager = mockk()
         prefsRepository = mockk()
         integrationRepository = mockk()
+        tileDao = mockk()
         context = mockk(relaxed = true)
         val server = mockk<Server>()
 
         every { server.id } returns serverId
         coEvery { serverManager.integrationRepository(serverId) } returns integrationRepository
         coEvery { serverManager.getServer() } returns server
+        coEvery { tileDao.getAll() } returns configuredTilesForAllSlots()
+        SdkVersion.sdkInt = Build.VERSION_CODES.N
 
         // Always override the handler so individual tests can decide to override it or not without impacting the others.
         FailFast.setHandler { exception, _ ->
             fail("Unhandled exception caught", exception)
         }
+    }
+
+    @AfterEach
+    fun tearDown() {
+        SdkVersion.resetSdkInt()
     }
 
     @Test
@@ -122,6 +139,62 @@ class FrontendEntityAddToManagerTest {
         val actions = createManager().getActionsForEntity(entityId)
 
         assertEquals(listOf(EntityAddToAction.EntityWidget), actions.unwrap())
+    }
+
+    @Test
+    fun `Given supported entity and free tile slot when getting actionsForEntity then returns Tile`() = runTest {
+        val entityId = "script.test"
+        mockGetEntity(entityId)
+        coEvery { tileDao.getAll() } returns configuredTilesForAllSlots().drop(1)
+
+        val actions = createManager().getActionsForEntity(entityId)
+
+        assertTrue(EntityAddToAction.Tile in actions.unwrap())
+    }
+
+    @Test
+    fun `Given unsupported SDK when getting actionsForEntity then does not return Tile`() = runTest {
+        val entityId = "script.test"
+        mockGetEntity(entityId)
+        coEvery { tileDao.getAll() } returns configuredTilesForAllSlots().drop(1)
+        SdkVersion.sdkInt = Build.VERSION_CODES.M
+
+        val actions = createManager().getActionsForEntity(entityId)
+
+        assertFalse(EntityAddToAction.Tile in actions.unwrap())
+    }
+
+    @Test
+    fun `Given all tile slots configured when getting actionsForEntity then does not return Tile`() = runTest {
+        val entityId = "script.test"
+        mockGetEntity(entityId)
+        coEvery { tileDao.getAll() } returns configuredTilesForAllSlots()
+
+        val actions = createManager().getActionsForEntity(entityId)
+
+        assertFalse(EntityAddToAction.Tile in actions.unwrap())
+    }
+
+    @Test
+    fun `Given unsupported entity and free tile slot when getting actionsForEntity then does not return Tile`() = runTest {
+        val entityId = "$CAMERA_DOMAIN.test"
+        mockGetEntity(entityId)
+        coEvery { tileDao.getAll() } returns configuredTilesForAllSlots().drop(1)
+
+        val actions = createManager().getActionsForEntity(entityId)
+
+        assertFalse(EntityAddToAction.Tile in actions.unwrap())
+    }
+
+    @Test
+    fun `Given tile row exists but is not setup when getting actionsForEntity then returns Tile`() = runTest {
+        val entityId = "script.test"
+        mockGetEntity(entityId)
+        coEvery { tileDao.getAll() } returns listOf(unconfiguredTile("tile_1")) + configuredTilesForAllSlots().drop(1)
+
+        val actions = createManager().getActionsForEntity(entityId)
+
+        assertTrue(EntityAddToAction.Tile in actions.unwrap())
     }
 
     @Test
@@ -213,8 +286,10 @@ class FrontendEntityAddToManagerTest {
     }
 
     @Test
-    fun `Given Tile action when executing then returns null`() = runTest {
-        assertNull(createManager().execute("light.test", EntityAddToAction.Tile))
+    fun `Given Tile action when executing then returns NavigateToTileConfig`() = runTest {
+        val event = createManager().execute("light.test", EntityAddToAction.Tile)
+
+        assertEquals(FrontendEvent.NavigateToTileConfig("light.test"), event)
     }
 
     @Test
@@ -288,6 +363,7 @@ class FrontendEntityAddToManagerTest {
         context = context,
         serverManager = serverManager,
         prefsRepository = prefsRepository,
+        tileDao = tileDao,
         isAutomotive = isAutomotive,
         isQuest = isQuest,
         isFullFlavor = isFullFlavor,
@@ -301,6 +377,22 @@ class FrontendEntityAddToManagerTest {
     }
 
     private fun createEntity(entityId: String): Entity = Entity(entityId = entityId, "", mapOf(), LocalDateTime.now(), LocalDateTime.now())
+
+    private fun configuredTile(tileId: String) = TileEntity(
+        tileId = tileId,
+        added = true,
+        serverId = serverId,
+        iconName = null,
+        entityId = "light.test",
+        label = "Light",
+        subtitle = null,
+        shouldVibrate = false,
+        authRequired = false,
+    )
+
+    private fun unconfiguredTile(tileId: String) = configuredTile(tileId).copy(entityId = "", label = "")
+
+    private fun configuredTilesForAllSlots() = tileSlots.map { configuredTile(it.id.value) }
 
     private fun List<ExternalEntityAddToAction>.unwrap(): List<EntityAddToAction> = map { ExternalEntityAddToAction.appPayloadToAction(it.appPayload) }
 }

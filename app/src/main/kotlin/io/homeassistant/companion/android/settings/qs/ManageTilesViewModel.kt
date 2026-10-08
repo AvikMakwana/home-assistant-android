@@ -18,6 +18,8 @@ import io.github.timoptr.mdiicons.toBitmap
 import io.homeassistant.companion.android.common.R as commonR
 import io.homeassistant.companion.android.common.compose.composable.HADropdownItem
 import io.homeassistant.companion.android.common.data.integration.display.EntitiesForDisplayManager
+import io.homeassistant.companion.android.common.data.integration.display.EntityDisplayState
+import io.homeassistant.companion.android.common.data.integration.display.EntityDisplayWithContext
 import io.homeassistant.companion.android.common.data.integration.isUsableInTile
 import io.homeassistant.companion.android.common.data.servers.ServerManager
 import io.homeassistant.companion.android.common.util.SdkVersion
@@ -43,10 +45,14 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 
 private const val TILE_ICON_SIZE_DP = 48
+private const val ARG_TILE_ID = "id"
+private const val ARG_ENTITY_ID = "entity_id"
+
+private data class PendingPreselectedEntity(val tileId: TileId, val entityId: String)
 
 @HiltViewModel
 internal class ManageTilesViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     private val serverManager: ServerManager,
     private val entitiesForDisplayManager: EntitiesForDisplayManager,
     private val tileDao: TileDao,
@@ -61,11 +67,17 @@ internal class ManageTilesViewModel @Inject constructor(
     private val _tileInfoSnackbar = MutableSharedFlow<Int>(replay = 1)
     val tileInfoSnackbar = _tileInfoSnackbar.asSharedFlow()
 
+    private var pendingPreselectedEntity = savedStateHandle.get<String>(ARG_ENTITY_ID)?.let { entityId ->
+        savedStateHandle.get<String>(ARG_TILE_ID)?.let { tileId ->
+            PendingPreselectedEntity(tileId = TileId(tileId), entityId = entityId)
+        }
+    }
+
     private var loadEntitiesJob: Job? = null
 
     init {
         // Initialize fields based on the tile_1 TileEntity
-        savedStateHandle.get<String>("id")?.let { id ->
+        savedStateHandle.get<String>(ARG_TILE_ID)?.let { id ->
             selectTile(TileId(id))
             viewModelScope.launch {
                 _tileInfoSnackbar.emit(commonR.string.tile_data_missing)
@@ -99,6 +111,9 @@ internal class ManageTilesViewModel @Inject constructor(
             val tile = tileSlots.find { it.id == id } ?: tileSlots.first()
             val entity = tileDao.get(tile.id.value)
             val setupEntity = entity?.takeIf { it.isSetup }
+            if (setupEntity != null || pendingPreselectedEntity?.tileId != tile.id) {
+                clearPendingPreselectedEntity()
+            }
             val serverId = if (entity?.serverId == null || entity.serverId == 0) {
                 serverManager.getServer()?.id ?: 0
             } else {
@@ -130,12 +145,14 @@ internal class ManageTilesViewModel @Inject constructor(
     fun selectServerId(serverId: Int) {
         if (serverId == _state.value.selectedServerId) return
         viewModelScope.launch {
+            clearPendingPreselectedEntity()
             _state.update { it.changeServer(serverId = serverId) }
             loadEntities(serverId)
         }
     }
 
     fun selectEntityId(entityId: String?) {
+        clearPendingPreselectedEntity()
         _state.update { it.copy(selectedEntityId = entityId) }
     }
 
@@ -174,10 +191,57 @@ internal class ManageTilesViewModel @Inject constructor(
     private fun loadEntities(serverId: Int) {
         loadEntitiesJob?.cancel()
         loadEntitiesJob = viewModelScope.launch {
-            entitiesForDisplayManager.snapshotInContext(serverId) { it.isUsableInTile() }.collect { state ->
-                _state.update { it.copy(entityDisplayState = state) }
-            }
+            entitiesForDisplayManager
+                .snapshotInContext(serverId) { it.isUsableInTile() }
+                .collect { entityDisplayState ->
+                    val pendingPreselectedEntity = pendingPreselectedEntity
+                    _state.update { state ->
+                        state.copy(entityDisplayState = entityDisplayState)
+                            .applyPendingPreselectedEntity(
+                                pendingPreselectedEntity = pendingPreselectedEntity,
+                                serverId = serverId,
+                                entityDisplayState = entityDisplayState,
+                            )
+                    }
+                    val state = _state.value
+                    if (
+                        pendingPreselectedEntity != null &&
+                        entityDisplayState is EntityDisplayState.Loaded &&
+                        state.selectedTileId == pendingPreselectedEntity.tileId &&
+                        state.selectedServerId == serverId &&
+                        (state.selectedEntityId == null || state.selectedEntityId == pendingPreselectedEntity.entityId)
+                    ) {
+                        clearPendingPreselectedEntity()
+                    }
+                }
         }
+    }
+
+    private fun ManageTilesState.applyPendingPreselectedEntity(
+        pendingPreselectedEntity: PendingPreselectedEntity?,
+        serverId: Int,
+        entityDisplayState: EntityDisplayState<EntityDisplayWithContext>,
+    ): ManageTilesState {
+        if (
+            pendingPreselectedEntity == null ||
+            selectedTileId != pendingPreselectedEntity.tileId ||
+            selectedServerId != serverId ||
+            selectedEntityId != null
+        ) {
+            return this
+        }
+        if (entityDisplayState !is EntityDisplayState.Loaded) return this
+
+        return if (entityDisplayState.entity(pendingPreselectedEntity.entityId) != null) {
+            copy(selectedEntityId = pendingPreselectedEntity.entityId)
+        } else {
+            this
+        }
+    }
+
+    private fun clearPendingPreselectedEntity() {
+        pendingPreselectedEntity = null
+        savedStateHandle.remove<String>(ARG_ENTITY_ID)
     }
 
     /** Asks the system to add [tileData] to the quick settings panel; the result is handled by [onSystemTileAddResult]. */
